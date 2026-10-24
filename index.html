@@ -746,8 +746,10 @@ ${roster}
 쟁점: (이번 메시지에서 전문가들의 판단이 가장 갈릴 지점 한 가지를 "A인가, B인가" 꼴의 한 문장으로)
 발언자: (이 쟁점에서 서로 다른 편에 설 전문가 2~3명의 이름만 쉼표로)`;
   try {
-    const out = await callProvider('gemini', sys, user);
-    return out.trim().slice(0, 300);
+    // 15초 안에 안 오면 메모 없이 회의로 넘어간다 (사전 호출 때문에 회의가 멈추면 안 됨)
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
+    const out = await Promise.race([callProvider('gemini', sys, user), timeout]);
+    return (out || '').trim().slice(0, 300) || null;
   } catch {
     return null; // 기획 실패 시 메모 없이 진행
   }
