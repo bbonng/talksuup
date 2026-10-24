@@ -830,6 +830,17 @@ function currentModel() {
   return m;
 }
 
+// 세대별 generationConfig
+// - Gemini 3.x: temperature 등 샘플링 파라미터를 받지 않고, 기본 사고 수준(medium)이 느리므로 low로 낮춘다 (채팅용)
+// - Gemini 2.x: 예전처럼 temperature 사용
+function genConfig(model, temperature, maxOutputTokens, bare = false) {
+  const cfg = { maxOutputTokens };
+  if (bare) return cfg;
+  if (/^gemini-[3-9]/.test(model)) cfg.thinkingConfig = { thinkingLevel: 'low' };
+  else cfg.temperature = temperature;
+  return cfg;
+}
+
 // 3사 회담 모델명 — 여기 한 곳만 바꾸면 됩니다
 const MODEL_IDS = {
   anthropic: 'claude-sonnet-5',
@@ -1037,17 +1048,21 @@ async function callGemini(onChunk) {
   };
   const temperature = TEMPS[currentPersona.id] ?? 0.7;
 
-  const body = {
+  const makeBody = (bare) => ({
     system_instruction: { parts: [{ text: currentPersona.prompt }] },
     contents: history.map((m) => ({ role: m.role, parts: [{ text: m.send ?? m.text }] })),
-    generationConfig: { temperature, maxOutputTokens: 16384 },
-  };
-
-  const res = await fetch(url, {
+    generationConfig: genConfig(model, temperature, 16384, bare),
+  });
+  const post = (bare) => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(makeBody(bare)),
+    signal: AbortSignal.timeout(90000),
   });
+
+  let res = await post(false);
+  // 설정 필드를 모델이 거부하면(400) 최소 설정으로 한 번 더
+  if (res.status === 400) res = await post(true);
 
   if (!res.ok) {
     let msg = `요청 실패 (HTTP ${res.status})`;
@@ -1105,7 +1120,7 @@ async function callProvider(provider, systemText, userText) {
       body: JSON.stringify({
         system_instruction: { parts: [{ text: systemText }] },
         contents: [{ role: 'user', parts: [{ text: userText }] }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
+        generationConfig: genConfig(model, 0.7, 8192),
       }),
     });
     if (!res.ok) throw new Error(await providerErr(res));
@@ -1307,7 +1322,10 @@ async function sendMessage() {
   } catch (e) {
     history.pop(); // 실패한 질문은 기록에서 제거해 재전송 가능하게
     bubble.classList.add('error');
-    bubble.textContent = `⚠️ ${e.message}`;
+    const msg = (e.name === 'TimeoutError' || e.name === 'AbortError')
+      ? '응답이 너무 오래 걸려 멈췄어요. 다시 보내 보시고, 계속되면 ⚙️ 설정에서 Flash-Lite 모델로 바꿔 보세요.'
+      : e.message;
+    bubble.textContent = `⚠️ ${msg}`;
   } finally {
     sending = false;
     $('sendBtn').disabled = false;
